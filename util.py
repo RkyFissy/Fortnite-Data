@@ -50,9 +50,12 @@ def get_config():
     log.debug('Loading config.json file...')
 
     try:
-        with open('config.json', 'r', encoding='utf-8') as f:
-            log.debug('Loaded.')
-            return json.load(f)
+        # Warning: Changes to protect information
+        # with open('config.json', 'r', encoding='utf-8') as f:
+        #     log.debug('Loaded.')
+        #     return json.load(f)
+        from replit import db
+        return db["config"]
     except:
         log.debug('Failed while loading config.json file, trying with "utf-8-sig" encoding...')
         try:

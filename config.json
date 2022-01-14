@@ -2,7 +2,8 @@
     "bot_token": "",
     "fortnite-api-key": "",
     "languages": [
-        "es"
+        "es",
+        "ja"
     ],
     "database_connection_str": null,
     "cogs": [

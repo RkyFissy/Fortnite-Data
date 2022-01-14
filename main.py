@@ -57,6 +57,7 @@ def run():
     util.log = logging.getLogger('FortniteData.util')
 
     util.configuration = util.get_config()
+    print(util.configuration)
     util.database = util.get_mongoclient().fortnitedata
 
     log.debug('Starting discord bot...')
