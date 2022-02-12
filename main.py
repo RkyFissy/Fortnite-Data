@@ -38,9 +38,6 @@ async def on_ready():
 
         util.fortniteapi[i] = util.FortniteAPI(i)
 
-    for guild in bot.guilds:
-        util.database_store_server(guild)
-
     util.ready = True
 
     log.info(f'Fortnite Data is ready! • Took {int((time.time() - util.start_time))} seconds.')
@@ -68,10 +65,21 @@ def run():
         except:
             log.error(f'An error ocurred loading cog "{cog}". Traceback: {traceback.format_exc()}')
 
+    """if sys.platform != 'win32':
+        log.debug('Running on non-win32 system. Installing uvloop')
+        try:
+            import uvloop
+            uvloop.install()
+        except ModuleNotFoundError:
+            log.error('Could not install uvloop. The module is not installed.')"""
+
     loop = asyncio.get_event_loop()
 
     try:
         loop.run_until_complete(bot.start(util.configuration.get('bot_token')))
+    except KeyboardInterrupt:
+        log.info('KeyboardInterrupt, exiting...')
+        loop.run_until_complete(bot.close())
     except Exception:
         log.critical(f'An error ocurred starting discord bot. Traceback:\n{traceback.format_exc()}')
         loop.run_until_complete(bot.close())

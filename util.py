@@ -1,4 +1,6 @@
+from urllib.parse import urlencode
 import traceback
+import aiofiles
 import asyncio
 import discord
 import logging
@@ -14,7 +16,7 @@ import sys
 
 debug = True if '--debug' in sys.argv else False
 
-version = 'dev-4.0'
+version = '4.0.0'
 
 log = None
 
@@ -24,6 +26,7 @@ ready = False
 languages = {}
 fortniteapi = {}
 server_cache = {}
+error_cache = {}
 
 on_ready_count = 0
 start_time = time.time()
@@ -87,7 +90,7 @@ def get_str(lang: str, string: str):
     
     except KeyError:
 
-        return languages['es'].get_item(item = string)
+        return f'missing {string} in {lang}*'
 
 
 def get_guild_lang(guild: discord.Guild):
@@ -106,7 +109,7 @@ def get_guild_lang(guild: discord.Guild):
 async def wait_cache_load():
 
     while True:
-        if fortniteapi._loaded_all == False:
+        if fortniteapi._loaded_cosmetics == False:
             await asyncio.sleep(0.5)
         else:
             return True
@@ -137,6 +140,7 @@ def database_store_server(guild: discord.Guild):
 
         data = {
             "server_id": guild.id,
+            "added": int(time.time()),
             "prefix": "f!",
             "language": "en",
             "search_language": "en",
@@ -144,7 +148,12 @@ def database_store_server(guild: discord.Guild):
                 "enabled": False,
                 "channel": None,
                 "webhook": None,
-                "webhook_id": None
+                "webhook_id": None,
+                "config": {
+                    "header": None,
+                    "subheader": None,
+                    "footer": None
+                }
             },
             "updates_channel": {
                 "enabled": False,
@@ -222,10 +231,7 @@ class Language:
         if self._loaded == False:
             return False
 
-        try:
-            return self.data[item]
-        except:
-            return f'missing {item} in {self.language}*'
+        return self.data[item]
 
     async def load_language_data(self):
 
@@ -272,7 +278,8 @@ class FortniteAPI:
             'Authorization': configuration.get('fortnite-api-key')
         }
 
-        self._loaded_all = False
+        self._loaded_cosmetics = False
+        self._loaded_playlists = False
         
         self.all_cosmetics = []
 
@@ -286,6 +293,8 @@ class FortniteAPI:
         self.sprays = []
         self.gliders = []
         self.banners = []
+
+        self.playlists = []
 
 
     async def _load_cosmetics(self):
@@ -303,8 +312,8 @@ class FortniteAPI:
 
             if data == None:
                 log.warning('Something was wrong with cosmetics API. Using cached cosmetics')
-                data = json.load(open(f'cache/cosmetics/all_{self.language}.json', 'r', encoding='utf-8'))
-
+                async with aiofiles.open(f'cache/cosmetics/all_{self.language}.json', 'r', encoding='utf-8') as f:
+                    data = json.loads(await f.read())
 
         for cosmetic in data['data']:
 
@@ -357,15 +366,45 @@ class FortniteAPI:
                     continue
       
 
-        with open(f'cache/cosmetics/all_{self.language}.json', 'w', encoding='utf-8') as f:
-            json.dump(data, f, indent=4, ensure_ascii=False)
+        async with aiofiles.open(f'cache/cosmetics/all_{self.language}.json', 'w', encoding='utf-8') as f:
+            await f.write(json.dumps(data))
 
-        self._loaded_all = True
+        self._loaded_cosmetics = True
 
         log.debug(f'[{self.language}] Updated cosmetic cache. Loaded {len(self.all_cosmetics)} cosmetics.')
 
         return self.all_cosmetics
 
+    async def _load_playlists(self):
+
+        log.debug(f'[{self.language}] Updating playlists cache...')
+
+        data = await self.get_playlists(language=self.language)
+
+        if data == False:
+            log.warning('Something was wrong with playlists API. Using cached playlists')
+            
+            async with aiofiles.open(f'cache/playlists/{self.language}.json', 'r', encoding='utf-8') as f:
+                data = json.loads(await f.read())
+
+        addedCount = 0
+
+        for playlist in data['data']:
+
+            if playlist not in self.playlists:
+
+                self.playlists.append(playlist)
+                addedCount += 1
+    
+        if addedCount != 0:
+            async with aiofiles.open(f'cache/playlists/{self.language}.json', 'w', encoding='utf-8') as f:
+                await f.write(json.dumps(data))
+        
+        self._loaded_playlists = True
+
+        log.debug(f'[{self.language}] Updated playlists cache. Loaded {addedCount} playlists.')
+
+        return self.playlists
         
     async def get_cosmetic(self, query: str, **kwargs):
 
@@ -373,7 +412,7 @@ class FortniteAPI:
         match_method = kwargs.get('match_method', 'starts')
 
         if len(self.all_cosmetics) == 0:
-            await self._load_cosmetics()
+            return False
 
         list_to_search = None
 
@@ -430,6 +469,50 @@ class FortniteAPI:
                 elif match_method == 'contains':
                     if query.lower() in item['name'].lower():
                         results.append(item)
+
+        return results
+
+    async def get_playlist(self, query: str, **kwargs):
+
+        match_method = kwargs.get('match_method', 'starts')
+
+        log.debug(f'Searching playlists with match method "{match_method}". Query: "{query}"')
+
+        if len(self.playlists) == 0:
+            return False
+
+        results = []
+
+        is_id = query.lower().startswith('playlist_')
+
+        for playlist in self.playlists:
+
+            if is_id:
+                if match_method == 'starts':
+                    if playlist['id'].lower().startswith(query.lower()):
+                        results.append(playlist)
+
+                elif match_method == 'contains':
+                    if query.lower() in playlist['id'].lower():
+                        results.append(playlist)
+
+            else:
+
+                if playlist['name'] == None: # some playlists don't have name
+                    nameOrId = playlist['id'].replace('playlist_', '')
+                else:
+                    if playlist['subName'] == None:
+                        nameOrId = f'{playlist["name"]}'
+                    else:
+                        nameOrId = f'{playlist["name"]} {playlist["subName"]}'
+
+                if match_method == 'starts':
+                    if nameOrId.lower().startswith(query.lower()):
+                        results.append(playlist)
+                
+                elif match_method == 'contains':
+                    if query.lower() in nameOrId.lower():
+                        results.append(playlist)
 
         return results
 
@@ -495,6 +578,17 @@ class FortniteAPI:
                 return False
             else:
                 return await response.json()
+
+def get_custom_shop_url(server: dict):
+
+    shopconfig = server['shop_channel']['config']
+    shopconfig['cache'] = int(time.time()) # just to prevent discord from caching old shop images
+
+    BaseURL = 'https://api.nitestats.com/v1/shop/image'
+
+    query_string = urlencode(shopconfig)
+
+    return BaseURL + '?' + query_string
 
 
 def get_color_by_rarity(value):
